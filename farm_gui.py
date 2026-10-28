@@ -15,6 +15,7 @@ from ctypes import wintypes
 from tkinter import messagebox
 
 import customtkinter as ctk
+import win32gui
 from PIL import Image
 
 import farm_bot
@@ -356,12 +357,20 @@ class App:
     def place_window(self):
         """放在农场窗口右侧，避免挡住游戏（被挡住会识别失败）。"""
         self.root.update_idletasks()
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        ww, wh = self.root.winfo_width(), self.root.winfo_height()
+        # 默认放屏幕中间；农场窗口最小化时坐标是 -32000，不能跟着它放，否则界面跑到屏幕外
+        px, py = (sw - ww) // 2, max(0, (sh - wh) // 2 - 30)
         try:
             title = load_config(CONFIG_PATH)["window"].get("title", "QQ经典农场")
-            x, y, w, h = GameWindow(title, activate=False).client_rect()
-            self.root.geometry(f"+{x + w + 24}+{max(0, y - 30)}")
+            gw = GameWindow(title, activate=False)
+            if gw.find() and not win32gui.IsIconic(gw.hwnd):
+                x, y, w, h = gw.client_rect()
+                if 0 <= x + w + 24 <= sw - ww and 0 <= y < sh:
+                    px, py = x + w + 24, max(0, y - 30)
         except Exception:
             pass
+        self.root.geometry(f"+{px}+{py}")
 
     # ================= 日志 =================
     def log(self, line):
