@@ -1,0 +1,7 @@
+opencv-python>=4.8
+numpy>=1.24
+mss>=9.0
+pyautogui>=0.9.54
+pywin32>=306
+rapidocr>=3.0
+onnxruntime>=1.17
