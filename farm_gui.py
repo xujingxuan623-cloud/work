@@ -106,6 +106,50 @@ def hotkey_listener(on_hotkey):
             on_hotkey()
 
 
+def parent_chain():
+    """从父进程往上的进程名列表，用来看是谁启动了我们。"""
+    class PE(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD),
+                    ("cntThreads", wintypes.DWORD), ("th32ParentProcessID", wintypes.DWORD),
+                    ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260)]
+    k32 = ctypes.windll.kernel32
+    k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    snap = k32.CreateToolhelp32Snapshot(2, 0)   # TH32CS_SNAPPROCESS
+    procs = {}
+    try:
+        e = PE(); e.dwSize = ctypes.sizeof(PE)
+        ok = k32.Process32FirstW(wintypes.HANDLE(snap), ctypes.byref(e))
+        while ok:
+            procs[e.th32ProcessID] = (e.th32ParentProcessID, e.szExeFile)
+            ok = k32.Process32NextW(wintypes.HANDLE(snap), ctypes.byref(e))
+    finally:
+        k32.CloseHandle(wintypes.HANDLE(snap))
+    names, pid = [], procs.get(os.getpid(), (0, ""))[0]
+    while pid in procs and len(names) < 8:
+        ppid, name = procs[pid]
+        names.append(name)
+        pid = ppid
+    return names
+
+
+def install_crash_logging():
+    """pythonw 没有控制台，崩溃信息会直接丢掉；把它们写进 logs/crash.log 方便事后查。"""
+    import faulthandler
+    import sys
+    LOG_DIR.mkdir(exist_ok=True)
+    f = open(LOG_DIR / "crash.log", "a", encoding="utf-8", buffering=1)
+    f.write(f"\n===== {dt.datetime.now():%Y-%m-%d %H:%M:%S} 启动 PID {os.getpid()} =====\n")
+    faulthandler.enable(f, all_threads=True)   # 底层崩溃（访问越界等）也能留下各线程的调用栈
+    sys.excepthook = lambda *a: f.write("未捕获异常：\n" + "".join(traceback.format_exception(*a)))
+    threading.excepthook = lambda a: f.write(
+        f"线程 {a.thread.name if a.thread else '?'} 未捕获异常：\n"
+        + "".join(traceback.format_exception(a.exc_type, a.exc_value, a.exc_traceback)))
+    if sys.stderr is None:
+        sys.stderr = f
+    return f
+
+
 def font(size=13, weight="normal"):
     return ctk.CTkFont(family=FONT, size=size, weight=weight)
 
@@ -145,6 +189,15 @@ class App:
         threading.Thread(target=hotkey_listener, args=(self.on_hotkey,), daemon=True).start()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.after(200, self.poll)
+        try:
+            chain = parent_chain()
+        except Exception:
+            chain = []
+        self.log(f"===== 程序启动 {dt.datetime.now():%Y-%m-%d %H:%M:%S}（PID {os.getpid()}，"
+                 f"启动来源：{' ← '.join(chain[:3]) or '未知'}）=====")
+        if any("claude" in n.lower() for n in chain):
+            self.log("提示：这次是从 Claude 里启动的，Claude 更新或重启时会把它一起关掉。"
+                     "长期挂机请关掉这个窗口，改用桌面上的「农场挂机助手」打开")
         self.log("就绪。先在 QQ 里打开「QQ经典农场」，再点「开始挂机」。挂机时按 F10 可随时停止。")
 
     # ================= 界面 =================
@@ -583,11 +636,13 @@ class App:
             if not messagebox.askyesno("退出", "脚本还在运行，确定停止并退出吗？"):
                 return
             self.stop_event.set()
+        self.log(f"===== 窗口被关闭，程序退出 {dt.datetime.now():%Y-%m-%d %H:%M:%S} =====")
         ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
         self.root.destroy()
 
 
 def main():
+    crash_log = install_crash_logging()
     # 让任务栏显示我们自己的图标，而不是 Python 的
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("qqfarm.autohelper")
@@ -595,8 +650,12 @@ def main():
         pass
     ctk.set_appearance_mode("light")
     root = ctk.CTk()
+    # 界面回调里的异常默认打印到 stderr（pythonw 下看不到），改成写进 crash.log
+    root.report_callback_exception = lambda *a: crash_log.write(
+        "界面回调异常：\n" + "".join(traceback.format_exception(*a)))
     App(root)
     root.mainloop()
+    crash_log.write(f"===== {dt.datetime.now():%Y-%m-%d %H:%M:%S} 正常退出 =====\n")
 
 
 if __name__ == "__main__":
