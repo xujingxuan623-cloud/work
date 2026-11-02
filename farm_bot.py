@@ -12,6 +12,7 @@ import argparse
 import configparser
 import datetime as dt
 import random
+import re
 import sys
 import threading
 import time
@@ -126,10 +127,12 @@ class FarmBot:
         self.relogin = run.getboolean("relogin", True)
         self.relogin_wait = run.getfloat("relogin_wait_min", 0)
         self.plant_pause_until = None
-        # 好友：右下角有提示就去；没提示时最多隔 friend_check_min 分钟主动去看一圈（0 = 每轮都去）
-        self.friend_check_min = run.getfloat("friend_check_min", 30)
-        self.last_friend_visit = None
-        self.friend_gain = False   # 上次去好友家有没有偷到 / 帮到
+        # 好友：平时右下角有提示才去；定时巡逻时每隔 friend_patrol_min 分钟挨个看一遍所有好友
+        self.patrol = run.getboolean("friend_patrol", True)
+        self.patrol_min = run.getfloat("friend_patrol_min", 60)
+        self.patrol_max = run.getint("friend_patrol_max", 100)        # 一次巡逻最多看几位
+        self.patrol_pages = run.getint("friend_patrol_pages", 40)     # 好友栏最多往后拖几次
+        self.last_patrol = None
         run = cfg["run"]
         self.action_delay = run.getfloat("action_delay", 0.8)
         self.load_delay = run.getfloat("page_load_delay", 2.5)
@@ -699,35 +702,165 @@ class FarmBot:
                 hints.add(name)
         return hints
 
-    def friend_visit_reason(self, steal, help_):
-        """灵活决定这轮要不要去好友家，返回原因文字；None = 不去。
-        右下角有提示就去；上次去还有收获就接着去；都没有时隔一段时间主动去看一圈（提示只显示一个好友，可能漏）。"""
+    def maybe_visit_friends(self, steal, help_):
+        """平时只在右下角有提示（墨镜小手 = 可偷，小农夫 = 求助）时去好友家，只进头像上有标记的；
+        开了定时巡逻时，每隔 friend_patrol_min 分钟把好友栏里的人挨个都进去看一遍。"""
+        now = dt.datetime.now()
+        if self.patrol and (self.last_patrol is None
+                            or now - self.last_patrol >= dt.timedelta(minutes=self.patrol_min)):
+            log("定时巡逻：挨个去每位好友家看看" if self.last_patrol else "刚开始挂机，先挨个去每位好友家看一遍")
+            self.visit_everyone(steal, help_)
+            self.last_patrol = dt.datetime.now()
+            return
         hints = self.friend_hints(self.grab())
         if steal and "steal" in hints:
-            return "右下角提示有好友可偷"
-        if help_ and "help" in hints:
-            return "右下角提示有好友求助"
-        if steal and self.friend_gain:
-            return "上次去好友家偷到了，接着去看看"
-        if self.last_friend_visit is None:
-            return "刚开始挂机，先去看一圈"
-        gap = (dt.datetime.now() - self.last_friend_visit).total_seconds() / 60
-        if gap >= self.friend_check_min:
-            return f"距上次去好友家已 {gap:.0f} 分钟，主动去看一圈"
-        nxt = self.last_friend_visit + dt.timedelta(minutes=self.friend_check_min)
-        log(f"右下角没有可偷 / 求助提示，这轮不去好友家（最晚 {nxt:%H:%M} 主动去看一次）")
-        return None
-
-    def maybe_visit_friends(self, steal, help_):
-        reason = self.friend_visit_reason(steal, help_)
-        if reason is None:
+            log("右下角提示有好友可偷")
+        elif help_ and "help" in hints:
+            log("右下角提示有好友求助")
+        else:
+            nxt = f"，下次定时巡逻 {self.last_patrol + dt.timedelta(minutes=self.patrol_min):%H:%M}" \
+                if self.patrol else ""
+            log(f"右下角没有可偷 / 求助提示，这轮不去好友家{nxt}")
             return
-        log(reason)
-        before = self.friends_stolen
         self.visit_friends(steal, help_)
-        self.last_friend_visit = dt.datetime.now()
-        # 只看偷菜：帮忙务农几乎每次都有，算进来就又变成每轮都去了；要帮忙会有右下角提示
-        self.friend_gain = self.friends_stolen > before
+
+    # ---------- 定时巡逻：好友栏里的人挨个看 ----------
+    def bar_cards(self, screen):
+        """切出底部好友栏里每张好友卡片，返回 [(x0, x1)]。
+        卡片底色 BGR≈(179,238,255)，卡片之间的空隙≈(205,238,255)，靠蓝色通道区分。"""
+        H, W = screen.shape[:2]
+        band = screen[int(0.86 * H):int(0.935 * H)].astype(int)
+        gap = (np.abs(band[..., 0] - 205) < 10) & (band[..., 1] > 225) & (band[..., 2] > 245)
+        isgap = gap.mean(axis=0) > 0.9
+        cards, x = [], 0
+        while x < W:
+            if isgap[x]:
+                x += 1
+                continue
+            st = x
+            while x < W and not isgap[x]:
+                x += 1
+            w = x - st
+            if w >= 40:
+                n = max(1, round(w / 105))   # 空隙被挡住时两张卡会连成一块，按宽度平均切开
+                cards += [(st + w * i // n, st + w * (i + 1) // n) for i in range(n)]
+        return cards
+
+    @staticmethod
+    def card_name(screen, card):
+        """卡片下方的名字区域（灰度）。名字 OCR 读不出时用它比对认人（只在不是当前好友的卡之间比）。"""
+        H = screen.shape[0]
+        cx = (card[0] + card[1]) // 2
+        return cv2.cvtColor(screen[int(0.925 * H):int(0.942 * H), cx - 38:cx + 38], cv2.COLOR_BGR2GRAY)
+
+    @staticmethod
+    def same_name(a, b):
+        """OCR 读同一个名字时特殊符号可能每次不一样（´ ` ' 之类），去掉符号后模糊比较。"""
+        import difflib
+        norm = lambda t: re.sub(r"[^0-9A-Za-z一-鿿]", "", t).lower()
+        a, b = norm(a), norm(b)
+        if not a or not b:
+            return False
+        return a == b or (min(len(a), len(b)) >= 3 and difflib.SequenceMatcher(None, a, b).ratio() >= 0.75)
+
+    def current_friend_name(self, screen):
+        """OCR 读左上角当前好友的名字（名字在上，下面一行是数字和「万」，跳过那行）。"""
+        import ocr
+        words = [w for w in ocr.read_words(self.crop_frac(screen, NAME_REGION))
+                 if w[3] >= 0.3 and re.search(r"[A-Za-z一-鿿]", w[0])
+                 and not re.search(r"\d+(\.\d+)?万|/", w[0])]
+        return min(words, key=lambda w: w[2])[0].strip() if words else None
+
+    def card_names(self, screen, cards):
+        """用 OCR 读出每张卡片下方的名字，返回和 cards 一一对应的列表（读不出是 None）。
+        主要按名字认人：当前好友那张卡的名字样子会变，只用图片比对的话同一个人前后对不上。"""
+        import ocr
+        H = screen.shape[0]
+        names = [None] * len(cards)
+        for text, cx, _, score in ocr.read_words(screen[int(0.918 * H):int(0.948 * H)]):
+            text = text.strip()
+            if score < 0.3 or not text:
+                continue
+            for i, (x0, x1) in enumerate(cards):
+                if x0 <= cx < x1:
+                    names[i] = text
+        return names
+
+    @staticmethod
+    def card_is_current(screen, card):
+        """当前所在好友的卡片有绿色边框。"""
+        H = screen.shape[0]
+        sub = screen[int(0.845 * H):int(0.95 * H), card[0]:card[1]].astype(int)
+        green = (sub[..., 1] > 170) & (sub[..., 2] < 160) & (sub[..., 0] < 110)
+        return green.sum() > 80
+
+    def wait_bar_still(self, timeout=2.0):
+        """等底部好友栏不再滚动，返回停稳后的截图。"""
+        end = time.time() + timeout
+        screen = self.grab()
+        while time.time() < end:
+            self.sleep(0.15)
+            nxt = self.grab()
+            if np.abs(self.bar_crop(nxt).astype(int) - self.bar_crop(screen)).mean() < 1.5:
+                return nxt
+            screen = nxt
+        return screen
+
+    def visit_everyone(self, steal, help_):
+        """进好友家后，把底部好友栏里的人从左到右挨个点进去，不管头像上有没有标记；看完一屏往左拖，拖不动就结束。"""
+        if not self.enter_any_friend():
+            log("  没能进入好友家，跳过巡逻")
+            return
+        seen, seen_img, visited, scrolls = set(), [], 0, 0
+        first = self.current_friend_name(self.grab())
+        if first:
+            seen.add(first)   # 第一位的卡片可能只露半张，不记下来巡逻时会再进一次
+        log(f"  列表第一位好友「{first or '名字没读出'}」：{self.work_in_friend_farm(steal, help_)}")
+        while visited < self.patrol_max:
+            screen = self.wait_bar_still()   # 切换好友后好友栏会自动滚动，停稳了再选
+            if not self.in_friend_farm(screen):
+                log("  已不在好友家，结束")
+                break
+            cards = self.bar_cards(screen)
+            todo = None
+            for card, name in zip(cards, self.card_names(screen, cards)):
+                if card[1] - card[0] < 90:   # 被边缘挡住一半的卡，拖过来再看
+                    continue
+                img = self.card_name(screen, card)
+                if self.card_is_current(screen, card):
+                    if name:
+                        seen.add(name)
+                    continue
+                # 名字读出来就按名字认；读不出（特殊符号）再用图片比对
+                known = (any(self.same_name(name, n) for n in seen) if name
+                         else any(self.same_face(img, i) for i in seen_img))
+                if todo is None and not known:
+                    todo = (card, name, img)
+            if todo is None:
+                if scrolls >= self.patrol_pages:
+                    break
+                before = self.bar_crop(screen)
+                self.check_stop()
+                drag(self.win, self.bar_from, self.bar_to)
+                self.sleep(0.5)
+                after = self.bar_crop(self.grab())
+                if before.shape == after.shape and np.abs(after.astype(int) - before).mean() < 3:
+                    break
+                scrolls += 1
+                continue
+            card, name, img = todo
+            seen.add(name) if name else seen_img.append(img)   # 进不去也不再点第二次
+            name = name or "名字没读出"
+            H = screen.shape[0]
+            cx, cy = (card[0] + card[1]) // 2, int(0.88 * H)
+            name_before = self.crop_frac(screen, NAME_REGION)
+            self.click(Hit("friend", 1, cx - 12, cy - 12, 24, 24), wait=0.1)
+            self.wait_change(NAME_REGION, name_before, timeout=self.load_delay + 1.5, settle=0.5)
+            self.close_popups()
+            visited += 1
+            log(f"  巡逻第 {visited} 位「{name}」：{self.work_in_friend_farm(steal, help_)}")
+        log(f"巡逻结束，共看了 {visited + 1} 位好友")
+        self.go_home()
 
     # ---------- 自家务农 ----------
     def farm_home(self):

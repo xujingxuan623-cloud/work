@@ -179,7 +179,8 @@ class App:
         self.v_milktea_iv = tk.StringVar(value=run.get("milktea_interval_min", "60"))
         self.v_relogin = tk.BooleanVar(value=run.getboolean("relogin", True))
         self.v_relogin_wait = tk.StringVar(value=run.get("relogin_wait_min", "0"))
-        self.v_friend_check = tk.StringVar(value=run.get("friend_check_min", "30"))
+        self.v_patrol = tk.BooleanVar(value=run.getboolean("friend_patrol", True))
+        self.v_patrol_min = tk.StringVar(value=run.get("friend_patrol_min", "60"))
         self.v_interval = tk.StringVar(value=run.get("round_interval_min", "10"))
         self.v_jitter = tk.StringVar(value=run.get("interval_jitter_min", "3"))
         self.v_quiet = tk.StringVar(value=run.get("quiet_hours", ""))
@@ -355,8 +356,9 @@ class App:
         sec = self.section(sc, "好友")
         self.switch(sec, "去好友家偷菜", self.v_steal, "只进头像上有「戴墨镜小手」的好友家")
         self.switch(sec, "帮好友务农", self.v_help, "挨个去有「小农夫」的好友家，比较花时间")
-        row = self.line(sec, "什么时候去好友家", "右下角提示可偷 / 求助就去；没提示时隔这么久主动去一次，填 0 = 每轮都去")
-        self.number(row, self.v_friend_check, "分钟", prefix="最多隔")
+        row = self.switch(sec, "定时巡逻所有好友", self.v_patrol,
+                          "平时有右下角提示才去；开了就定时挨个看一遍所有好友")
+        self.number(row, self.v_patrol_min, "分钟", prefix="每")
 
         sec = self.section(sc, "领取奖励")
         self.switch(sec, "自动领取每日任务奖励", self.v_tasks, "书本图标出现红色角标时去领")
@@ -479,7 +481,7 @@ class App:
             jitter = max(0.0, float(self.v_jitter.get()))
             relogin_wait = max(0.0, float(self.v_relogin_wait.get()))
             milktea_iv = max(10.0, float(self.v_milktea_iv.get()))
-            friend_check = max(0.0, float(self.v_friend_check.get()))
+            patrol_min = max(10.0, float(self.v_patrol_min.get()))
         except ValueError:
             messagebox.showerror("设置有误", "间隔 / 等待分钟数请填数字")
             self.tabs.set("  设置  ")
@@ -500,7 +502,8 @@ class App:
             "milktea_interval_min": f"{milktea_iv:g}",
             "relogin": str(self.v_relogin.get()).lower(),
             "relogin_wait_min": f"{relogin_wait:g}",
-            "friend_check_min": f"{friend_check:g}",
+            "friend_patrol": str(self.v_patrol.get()).lower(),
+            "friend_patrol_min": f"{patrol_min:g}",
             "round_interval_min": f"{interval:g}",
             "interval_jitter_min": f"{jitter:g}",
             "quiet_hours": quiet,
