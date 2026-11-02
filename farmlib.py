@@ -168,7 +168,8 @@ class Matcher:
                 interp = cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR
                 yield cv2.resize(tpl, None, fx=s, fy=s, interpolation=interp)
 
-    def find_all(self, screen, role, threshold=None):
+    def find_all(self, screen, role, threshold=None, region=None):
+        """region 不为空时用它代替配置里这个角色的查找范围（窗口宽高比例 x0, y0, x1, y1）。"""
         tpls = self.templates(role)
         if not tpls:
             if role not in self._warned:
@@ -176,7 +177,7 @@ class Matcher:
                 self._warned.add(role)
             return []
         thr = threshold or self.thresholds.get(role, self.default_threshold)
-        screen, ox, oy = self._crop_region(screen, role)
+        screen, ox, oy = self._crop_region(screen, role, region)
         H, W = screen.shape[:2]
         cands = []
         for tpl in tpls:
@@ -192,22 +193,23 @@ class Matcher:
                 cands += [(float(res[y, x]), int(x) + ox, int(y) + oy, tw, th) for x, y in zip(xs, ys)]
         return [Hit(role, *c) for c in _nms(cands)]
 
-    def _crop_region(self, screen, role):
-        if role not in self.regions:
+    def _crop_region(self, screen, role, region=None):
+        region = region or self.regions.get(role)
+        if not region:
             return screen, 0, 0
         H, W = screen.shape[:2]
-        x0, y0, x1, y1 = self.regions[role]
+        x0, y0, x1, y1 = region
         ox, oy = int(x0 * W), int(y0 * H)
         return screen[oy:int(y1 * H), ox:int(x1 * W)], ox, oy
 
-    def find(self, screen, role, threshold=None):
-        hits = self.find_all(screen, role, threshold)
+    def find(self, screen, role, threshold=None, region=None):
+        hits = self.find_all(screen, role, threshold, region)
         return hits[0] if hits else None
 
-    def best_score(self, screen, role):
+    def best_score(self, screen, role, region=None):
         """不管阈值，返回最高相似度及位置（用于 --test 调阈值）。"""
         best = None
-        screen, ox, oy = self._crop_region(screen, role)
+        screen, ox, oy = self._crop_region(screen, role, region)
         for tpl in self.templates(role):
             for t in self._scaled(tpl):
                 th, tw = t.shape[:2]

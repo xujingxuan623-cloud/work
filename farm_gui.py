@@ -179,6 +179,7 @@ class App:
         self.v_milktea_iv = tk.StringVar(value=run.get("milktea_interval_min", "60"))
         self.v_relogin = tk.BooleanVar(value=run.getboolean("relogin", True))
         self.v_relogin_wait = tk.StringVar(value=run.get("relogin_wait_min", "0"))
+        self.v_friend_check = tk.StringVar(value=run.get("friend_check_min", "30"))
         self.v_interval = tk.StringVar(value=run.get("round_interval_min", "10"))
         self.v_jitter = tk.StringVar(value=run.get("interval_jitter_min", "3"))
         self.v_quiet = tk.StringVar(value=run.get("quiet_hours", ""))
@@ -352,8 +353,10 @@ class App:
         self.switch(sec, "自家务农", self.v_farm, "除草 / 除虫 / 浇水")
 
         sec = self.section(sc, "好友")
-        self.switch(sec, "去好友家偷菜", self.v_steal, "只去头像上有「戴墨镜小手」的好友家")
+        self.switch(sec, "去好友家偷菜", self.v_steal, "只进头像上有「戴墨镜小手」的好友家")
         self.switch(sec, "帮好友务农", self.v_help, "挨个去有「小农夫」的好友家，比较花时间")
+        row = self.line(sec, "什么时候去好友家", "右下角气泡出现墨镜小手 / 小农夫就去；没提示时隔一段时间主动去看一圈，填 0 每轮都去")
+        self.number(row, self.v_friend_check, "分钟", prefix="最多隔")
 
         sec = self.section(sc, "领取奖励")
         self.switch(sec, "自动领取每日任务奖励", self.v_tasks, "书本图标出现红色角标时去领")
@@ -476,6 +479,7 @@ class App:
             jitter = max(0.0, float(self.v_jitter.get()))
             relogin_wait = max(0.0, float(self.v_relogin_wait.get()))
             milktea_iv = max(10.0, float(self.v_milktea_iv.get()))
+            friend_check = max(0.0, float(self.v_friend_check.get()))
         except ValueError:
             messagebox.showerror("设置有误", "间隔 / 等待分钟数请填数字")
             self.tabs.set("  设置  ")
@@ -496,6 +500,7 @@ class App:
             "milktea_interval_min": f"{milktea_iv:g}",
             "relogin": str(self.v_relogin.get()).lower(),
             "relogin_wait_min": f"{relogin_wait:g}",
+            "friend_check_min": f"{friend_check:g}",
             "round_interval_min": f"{interval:g}",
             "interval_jitter_min": f"{jitter:g}",
             "quiet_hours": quiet,

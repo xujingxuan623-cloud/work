@@ -44,6 +44,8 @@ ROLES = {
     "milktea_take": "「累计收益」窗口里的「领取」按钮（黄色可领，灰色不可领）",
     "milktea_close": "「累计收益」窗口右上角的 ✕",
     "milktea_back": "奶茶店左上角的返回箭头",
+    "plant_confirm": "大作物（占 2x2 地）点了种子后摆放位置用的绿色 ✓",
+    "plant_cancel": "大作物摆放时的红色 ✗",
     "farm_all":     "「一键务农」按钮（自家、好友家通用）",
     "friend_help":  "好友家底部好友栏里，头像右上角「小农夫」= 需要帮忙",
     "close":        "各种弹窗的关闭 / 确定按钮（可截多张：close.png、close_2.png ...）",
@@ -59,6 +61,8 @@ SEED_OFFSET = (0, 24)
 NAME_REGION = (0.04, 0.12, 0.35, 0.18)
 # 任务书本图标右上角红色数字角标的位置（相对书本模板左上角：x0, y0, x1, y1）
 TASK_BADGE_REL = (32, -10, 48, 6)
+# 自家右下角「好友求助」气泡右侧小图标的位置（窗口宽高比例）：墨镜小手 = 有好友可偷，小农夫 = 有好友要帮忙
+FRIEND_HINT_REGION = (0.80, 0.80, 1.0, 0.88)
 
 
 _log_sink = print
@@ -122,6 +126,10 @@ class FarmBot:
         self.relogin = run.getboolean("relogin", True)
         self.relogin_wait = run.getfloat("relogin_wait_min", 0)
         self.plant_pause_until = None
+        # 好友：右下角有提示就去；没提示时最多隔 friend_check_min 分钟主动去看一圈（0 = 每轮都去）
+        self.friend_check_min = run.getfloat("friend_check_min", 30)
+        self.last_friend_visit = None
+        self.friend_gain = False   # 上次去好友家有没有偷到 / 帮到
         run = cfg["run"]
         self.action_delay = run.getfloat("action_delay", 0.8)
         self.load_delay = run.getfloat("page_load_delay", 2.5)
@@ -314,20 +322,24 @@ class FarmBot:
         fx, fy = self.blank_spot
         self.click(Hit("blank", 1, int(fx * w) - 4, int(fy * h) - 4, 8, 8), wait=0.8)
 
-    def find_empty_plot(self):
-        """返回一块空地的点击位置（Hit），没有空地返回 None。
+    def find_empty_plot(self, skip=()):
+        """返回一块空地的点击位置（Hit），没有空地返回 None。skip 里的位置（点过没反应的）不再返回。
         主要靠 empty_tile（空地块中间没有种子堆/幼苗）；白色小手 empty_plot 只是偶尔出现的提示，作为补充。"""
+        def fresh(cx, cy):
+            return all(abs(cx - sx) > 15 or abs(cy - sy) > 15 for sx, sy in skip)
+
         for _ in range(5):   # 小手是动画，多看几帧
             screen = self.grab()
-            tiles = self.find_all(screen, "empty_tile")
+            tiles = [t for t in self.find_all(screen, "empty_tile") if fresh(*t.center)]
             if tiles:
                 t = max(tiles, key=lambda h: h.score)
                 cx, cy = t.center
                 return Hit("plot", t.score, cx - 4, cy - 4, 8, 8)
             hand = self.find(screen, "empty_plot")
             if hand:
-                cx, cy = hand.center
-                return Hit("plot", hand.score, cx + PLOT_OFFSET[0] - 4, cy + PLOT_OFFSET[1] - 4, 8, 8)
+                cx, cy = hand.center[0] + PLOT_OFFSET[0], hand.center[1] + PLOT_OFFSET[1]
+                if fresh(cx, cy):
+                    return Hit("plot", hand.score, cx - 4, cy - 4, 8, 8)
             self.sleep(0.2)
         return None
 
@@ -351,22 +363,33 @@ class FarmBot:
             return
         if self.plant_pause_until and dt.datetime.now() < self.plant_pause_until:
             return
+        self.cancel_placement()   # 上次残留的摆放状态先取消，不然点空地没反应
         bad = []        # 本轮种不上的种子（按在种子栏里的 x 位置记）
         last = None     # 上一次点的种子 (数量, x, 当时所有数量)
-        for _ in range(12):
-            plot = self.find_empty_plot()
+        dead_plots = []  # 点了没弹出种子栏的空地位置，换别的空地试
+        kinds = 0       # 本轮种了几种种子
+        # 种子零散时每种只够种几块，要反复「点空地 → 选种子」，所以次数给足
+        for _ in range(30):
+            plot = self.find_empty_plot(skip=dead_plots)
             if not plot:
                 if last:
-                    log("  空地都种上了")
+                    log(f"  空地都种上了（本轮用了 {kinds} 种种子）")
+                elif dead_plots:
+                    log("  剩下的空地点了都没反应，跳过种菜（截图在 debug/plant_*.png）")
                 return
             self.click(plot, wait=0.7)
             screen = self.grab()
             seeds = self.read_seed_bar(screen, plot)
             self.save_shot("plant", screen)
             if seeds is None:
-                log("  点了空地但没出现种子栏，跳过种菜（截图在 debug/plant_*.png）")
                 self.dismiss()
-                return
+                self.cancel_placement()
+                dead_plots.append(plot.center)
+                if len(dead_plots) >= 3:
+                    log("  连点 3 块空地都没出现种子栏，跳过种菜（截图在 debug/plant_*.png）")
+                    return
+                log("  点了空地但没出现种子栏，换一块空地再试")
+                continue
             counts = sorted(s[0] for s in seeds)
             if last is not None:
                 if counts == last[2]:
@@ -392,14 +415,19 @@ class FarmBot:
             self.click(Hit("seed", 1, sx + SEED_OFFSET[0] - 6, sy + SEED_OFFSET[1] - 6, 12, 12),
                        wait=1.2)
             self.planted += 1
+            kinds += 1
             last = (n, sx, counts)
-            # 种子栏如果还开着，说明没种上：直接按“数量没变”处理
             after = self.grab()
-            if self.read_seed_bar(after, plot) is not None:
+            # 大作物（占 2x2）点了种子后要摆放位置：点 ✓ 才真正种下，放不下就取消换一种
+            placed = self.confirm_placement(after)
+            # 种子栏如果还开着，说明没种上：直接按“数量没变”处理
+            if placed is False or (placed is None and self.read_seed_bar(after, plot) is not None):
                 self.save_shot("plant_fail", after)
                 self.planted -= 1
+                kinds -= 1
                 bad.append(sx)
-                log(f"  点了数量 {n} 的种子但种子栏没关，没种上，换一种")
+                why = "大作物放不下" if placed is False else "种子栏没关"
+                log(f"  点了数量 {n} 的种子但{why}，没种上，换一种")
                 cands = [s for s in seeds if all(abs(s[1] - bx) > 12 for bx in bad)]
                 if not cands:
                     log("  现有种子都种不上，1 小时后再试（截图在 debug/plant_fail_*.png）")
@@ -409,6 +437,28 @@ class FarmBot:
                 self.dismiss()
                 last = None
         log("  种菜重复次数过多，停止本轮种菜")
+
+    def confirm_placement(self, screen):
+        """大作物点了种子后不会直接种，而是出现绿色 ✓ 和红色 ✗ 让你摆放位置。
+        返回 None = 没有这一步；True = 点 ✓ 种下了；False = ✓ 点了没用（位置不够），已取消。"""
+        ok = self.find(screen, "plant_confirm")
+        if not ok:
+            return None
+        log("  这种是大作物，要确认摆放位置，点 ✓")
+        self.click(ok, wait=0.3)
+        if self.wait_gone("plant_confirm", timeout=2.5):
+            self.sleep(0.6)
+            return True
+        self.cancel_placement()
+        return False
+
+    def cancel_placement(self):
+        """还处在摆放状态（有红色 ✗）就点 ✗ 退出。"""
+        x = self.find(self.grab(), "plant_cancel")
+        if x:
+            self.click(x, wait=0.8)
+            return True
+        return False
 
     # ---------- 保证在自家农场（掉线 / 弹窗恢复） ----------
     # 画面认不出时，用 OCR 找这些按钮点（越靠前越优先）
@@ -630,6 +680,45 @@ class FarmBot:
         log(f"好友家处理完，共去了 {visited} 位好友家")
         self.go_home()
 
+    def friend_hints(self, screen):
+        """看自家右下角「好友求助」气泡里的小图标：墨镜小手 = 有好友可偷，小农夫 = 有好友要帮忙。"""
+        hints = set()
+        for role, name in (("friend_steal", "steal"), ("friend_help", "help")):
+            if self.matcher.has(role) and self.matcher.find(screen, role, threshold=0.8,
+                                                            region=FRIEND_HINT_REGION):
+                hints.add(name)
+        return hints
+
+    def friend_visit_reason(self, steal, help_):
+        """灵活决定这轮要不要去好友家，返回原因文字；None = 不去。
+        右下角有提示就去；上次去还有收获就接着去；都没有时隔一段时间主动去看一圈（提示只显示一个好友，可能漏）。"""
+        hints = self.friend_hints(self.grab())
+        if steal and "steal" in hints:
+            return "右下角提示有好友可偷"
+        if help_ and "help" in hints:
+            return "右下角提示有好友求助"
+        if steal and self.friend_gain:
+            return "上次去好友家偷到了，接着去看看"
+        if self.last_friend_visit is None:
+            return "刚开始挂机，先去看一圈"
+        gap = (dt.datetime.now() - self.last_friend_visit).total_seconds() / 60
+        if gap >= self.friend_check_min:
+            return f"距上次去好友家已 {gap:.0f} 分钟，主动去看一圈"
+        nxt = self.last_friend_visit + dt.timedelta(minutes=self.friend_check_min)
+        log(f"右下角没有可偷 / 求助提示，这轮不去好友家（最晚 {nxt:%H:%M} 主动去看一次）")
+        return None
+
+    def maybe_visit_friends(self, steal, help_):
+        reason = self.friend_visit_reason(steal, help_)
+        if reason is None:
+            return
+        log(reason)
+        before = self.friends_stolen
+        self.visit_friends(steal, help_)
+        self.last_friend_visit = dt.datetime.now()
+        # 只看偷菜：帮忙务农几乎每次都有，算进来就又变成每轮都去了；要帮忙会有右下角提示
+        self.friend_gain = self.friends_stolen > before
+
     # ---------- 自家务农 ----------
     def farm_home(self):
         """自家地里有草 / 虫 / 缺水时，底部按钮会变成「一键务农」，点它。"""
@@ -775,7 +864,7 @@ class FarmBot:
             self.plant_home()
         steal, help_ = run.getboolean("do_steal", True), run.getboolean("do_help", False)
         if steal or help_:
-            self.visit_friends(steal, help_)
+            self.maybe_visit_friends(steal, help_)
             self.ensure_home()
         if run.getboolean("do_milktea", True):
             self.claim_milktea()
