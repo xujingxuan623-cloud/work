@@ -35,36 +35,43 @@ VK_F10 = 0x79
 MOD_NOREPEAT = 0x4000
 WM_HOTKEY = 0x0312
 
-# ---------- 配色（田园风：奶油底、草绿主色、橙色点缀） ----------
+# ---------- 配色：苹果系统色（浅色, 深色），跟随 Windows 的浅色 / 深色模式 ----------
 C = {
-    "bg": "#F5EFE3",          # 窗口底色
-    "card": "#FFFDF8",        # 卡片
-    "border": "#E8DCC6",
-    "text": "#4A3B2A",        # 深棕文字
-    "muted": "#9A8A76",
-    "green": "#4CAF50",
-    "green_hover": "#3E9442",
-    "green_soft": "#E5F4E1",
-    "red": "#E5604D",
-    "red_hover": "#C94D3B",
-    "orange": "#F2A33A",
-    "orange_hover": "#DB8D25",
-    "orange_soft": "#FDF0DC",
-    "gray_soft": "#EEE8DD",
-    "log_bg": "#FBF8F2",
+    "bg": ("#F2F2F7", "#000000"),            # 分组列表底色
+    "card": ("#FFFFFF", "#1C1C1E"),          # 白色圆角卡片
+    "sep": ("#E5E5EA", "#38383A"),           # 行与行之间的细分隔线
+    "fill": ("#E9E9EE", "#2C2C2E"),          # 灰色按钮 / 分段控件底槽 / 输入框
+    "fill_hover": ("#DCDCE1", "#3A3A3C"),
+    "seg_sel": ("#FFFFFF", "#636366"),       # 分段控件选中的滑块
+    "text": ("#1C1C1E", "#FFFFFF"),
+    "muted": ("#8E8E93", "#98989D"),
+    "blue": ("#007AFF", "#0A84FF"),
+    "blue_hover": ("#0066D6", "#0071E3"),
+    "blue_dis": ("#A6CDFF", "#16365C"),
+    "green": ("#34C759", "#30D158"),
+    "green_tint": ("#E3F7E8", "#0E2A16"),
+    "green_text": ("#248A3D", "#30D158"),
+    "red": ("#FF3B30", "#FF453A"),
+    "red_tint": ("#FFE5E3", "#3A1715"),
+    "red_tint_hover": ("#FFD6D2", "#4A1D1A"),
+    "orange_tint": ("#FFF1DC", "#33240B"),
+    "orange_text": ("#C25E00", "#FF9F0A"),
+    "switch_off": ("#E9E9EA", "#39393D"),
 }
 FONT = "Microsoft YaHei UI"
+NUM_FONT = "Segoe UI Variable Display"   # 数字字形接近苹果的 SF 字体
+TAB_RUN, TAB_SET = "        运行情况        ", "          设置          "
 
-# 统计卡片：(属性名, 标题, 单位, 颜色)
+# 统计卡片：(属性名, 标题, 单位, 颜色)，颜色取苹果系统色
 STATS = [
-    ("harvests", "收菜", "次", "#4CAF50"),
-    ("planted", "播种", "次", "#7CB342"),
-    ("farmed", "自家务农", "次", "#26A69A"),
-    ("friends_stolen", "偷菜", "家", "#F2A33A"),
-    ("friends_helped", "帮好友务农", "家", "#8D6E63"),
-    ("tasks_claimed", "领任务奖励", "个", "#5C9BD6"),
-    ("milktea_claims", "奶茶收益", "次", "#D9822B"),
-    ("reconnects_total", "掉线恢复", "次", "#9575CD"),
+    ("harvests", "收菜", "次", ("#34C759", "#30D158")),
+    ("planted", "播种", "次", ("#00C7BE", "#63E6E2")),
+    ("farmed", "自家务农", "次", ("#30B0C7", "#40C8E0")),
+    ("friends_stolen", "偷菜", "家", ("#FF9500", "#FF9F0A")),
+    ("friends_helped", "帮好友务农", "家", ("#A2845E", "#AC8E68")),
+    ("tasks_claimed", "任务奖励", "个", ("#5856D6", "#5E5CE6")),
+    ("milktea_claims", "奶茶收益", "次", ("#FF2D55", "#FF375F")),
+    ("reconnects_total", "掉线恢复", "次", ("#AF52DE", "#BF5AF2")),
 ]
 
 
