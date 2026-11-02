@@ -1,92 +1,109 @@
 """生成程序图标 assets/farm.ico（多尺寸）和 assets/farm.png。改了样式重新运行一次即可：
     python tools/make_icon.py
+
+风格仿苹果 App 图标：超椭圆（圆润的方形）外形 + 柔和的绿色渐变 + 一株白色嫩芽，不加多余装饰。
 """
+import math
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 OUT = Path(__file__).resolve().parent.parent / "assets"
 S = 1024   # 先画大图再缩小，边缘更平滑
 
 
-def lerp(a, b, t):
-    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
+def squircle_mask(size, n=5.0, margin=0.0):
+    """苹果图标那种「连续曲率」圆角方形：|x|^n + |y|^n <= 1。"""
+    ss = size * 4
+    c = np.linspace(-1 - margin, 1 + margin, ss)
+    x, y = np.meshgrid(c, c)
+    m = (np.abs(x) ** n + np.abs(y) ** n <= 1).astype(np.uint8) * 255
+    return Image.fromarray(m, "L").resize((size, size), Image.LANCZOS)
 
 
-def leaf_points(base, angle, length, width, n=40):
-    """两头尖的叶子轮廓：从 base 出发，沿 angle 方向长 length，最宽 width。"""
-    import math
+def gradient(size, top, bottom):
+    """竖向渐变，左上角再加一点柔光，让颜色不死板。"""
+    t = np.linspace(0, 1, size)[:, None, None]
+    img = np.array(top)[None, None] * (1 - t) + np.array(bottom)[None, None] * t
+    img = np.repeat(img, size, axis=1)
+    yy, xx = np.mgrid[0:size, 0:size] / size
+    glow = np.exp(-(((xx - 0.3) ** 2) + ((yy - 0.15) ** 2)) / 0.12)[..., None]
+    img = img + glow * 22
+    return Image.fromarray(np.clip(img, 0, 255).astype(np.uint8), "RGB")
+
+
+def leaf_points(base, angle, length, width, n=80):
+    """两头尖、中间饱满的叶子轮廓：从 base 出发沿 angle（度，0 = 向右，逆时针）长 length。"""
     a = math.radians(angle)
-    ux, uy = math.cos(a), math.sin(a)          # 沿叶子方向
-    vx, vy = -uy, ux                            # 垂直方向
-    top, bot = [], []
+    ux, uy = math.cos(a), -math.sin(a)
+    vx, vy = -uy, ux
+    side1, side2 = [], []
     for i in range(n + 1):
         t = i / n
-        half = width / 2 * math.sin(math.pi * t) ** 0.8
+        half = width / 2 * math.sin(math.pi * t) ** 0.75 * (1 - 0.25 * t)
         cx, cy = base[0] + ux * length * t, base[1] + uy * length * t
-        top.append((cx + vx * half, cy + vy * half))
-        bot.append((cx - vx * half, cy - vy * half))
-    return top + bot[::-1]
+        side1.append((cx + vx * half, cy + vy * half))
+        side2.append((cx - vx * half, cy - vy * half))
+    return side1 + side2[::-1]
 
 
-def leaf(d, base, angle, length, width, fill, outline, vein):
-    import math
-    d.polygon(leaf_points(base, angle, length + 40, width + 50), fill=outline)
-    d.polygon(leaf_points(base, angle, length, width), fill=fill)
-    a = math.radians(angle)
-    d.line([base, (base[0] + math.cos(a) * length * 0.82, base[1] + math.sin(a) * length * 0.82)],
-           fill=vein, width=18)
+def stem_points(p0, p1, p2, n=60):
+    """二次贝塞尔曲线上的点（嫩芽的茎）。"""
+    pts = []
+    for i in range(n + 1):
+        t = i / n
+        x = (1 - t) ** 2 * p0[0] + 2 * (1 - t) * t * p1[0] + t ** 2 * p2[0]
+        y = (1 - t) ** 2 * p0[1] + 2 * (1 - t) * t * p1[1] + t ** 2 * p2[1]
+        pts.append((x, y))
+    return pts
 
 
-def draw_icon():
-    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+def sprout_layer(size):
+    """白色嫩芽（单独一层，方便加阴影）。"""
+    layer = Image.new("L", (size, size), 0)
+    d = ImageDraw.Draw(layer)
+    k, g = size / 1024, 1.18   # g：整株放大倍数；下面的坐标按 1024 画布写，整体往上挪到视觉居中
 
-    # 1. 圆角方块底，竖向渐变绿
-    grad = Image.new("RGB", (S, S))
-    gd = ImageDraw.Draw(grad)
-    top, bottom = (126, 206, 96), (52, 140, 70)
-    for y in range(S):
-        gd.line([(0, y), (S, y)], fill=lerp(top, bottom, y / S))
-    mask = Image.new("L", (S, S), 0)
-    ImageDraw.Draw(mask).rounded_rectangle((40, 40, S - 40, S - 40), radius=230, fill=255)
-    img.paste(grad, (0, 0), mask)
+    def P(x, y):
+        return ((x - 512) * g + 512) * k, ((y - 610) * g + 525) * k
 
-    d = ImageDraw.Draw(img)
-    # 2. 右上角小太阳
-    d.ellipse((680, 150, 840, 310), fill=(255, 214, 92))
+    stem = stem_points(P(512, 790), P(500, 640), P(520, 500))
+    r = 32 * g * k
+    for x, y in stem:
+        d.ellipse((x - r, y - r, x + r, y + r), fill=255)
+    d.polygon(leaf_points(P(528, 520), 38, 330 * g * k, 175 * g * k), fill=255)    # 右边大叶
+    d.polygon(leaf_points(P(506, 585), 150, 250 * g * k, 135 * g * k), fill=255)   # 左边小叶
+    return layer
 
-    # 3. 底部土堆（棕色），只保留圆角方块里面的部分
-    soil = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    sd = ImageDraw.Draw(soil)
-    sd.ellipse((60, 690, 964, 1180), fill=(139, 90, 50))
-    sd.ellipse((180, 720, 844, 900), fill=(163, 110, 62))
-    soil_mask = Image.new("L", (S, S), 0)
-    soil_mask.paste(mask, (0, 0), soil.split()[3])
-    img.paste(soil, (0, 0), soil_mask)
 
-    # 4. 嫩芽：奶白色弯茎 + 两片尖叶（带深绿描边，小尺寸也看得清）
-    leaf_fill, outline, vein = (255, 248, 222), (36, 96, 48), (126, 206, 96)
-    stem = [(512, 780), (506, 690), (500, 600), (504, 520)]
-    d.line(stem, fill=outline, width=80, joint="curve")
-    d.line(stem, fill=leaf_fill, width=46, joint="curve")
-    base = (504, 530)
-    leaf(d, base, angle=-148, length=340, width=150, fill=leaf_fill, outline=outline, vein=vein)  # 左叶
-    leaf(d, base, angle=-38, length=400, width=170, fill=leaf_fill, outline=outline, vein=vein)   # 右叶
-
-    # 5. 轻微阴影让图标在浅色任务栏上更立体
-    shadow = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    ImageDraw.Draw(shadow).rounded_rectangle((50, 64, S - 30, S - 16), radius=230, fill=(0, 0, 0, 70))
-    shadow = shadow.filter(ImageFilter.GaussianBlur(18))
-    return Image.alpha_composite(shadow, img)
+def make(size=S):
+    mask = squircle_mask(size)
+    bg = gradient(size, (112, 222, 140), (22, 160, 84))
+    sprout = sprout_layer(size)
+    # 嫩芽下方一层很淡的投影，显得有立体感
+    shadow = Image.new("L", (size, size), 0)
+    sh = sprout.filter(ImageFilter.GaussianBlur(size * 0.02)).point(lambda v: int(v * 0.22))
+    shadow.paste(sh, (0, int(size * 0.012)))
+    img = bg.copy()
+    img.paste((10, 90, 45), mask=shadow)
+    img.paste((255, 255, 255), mask=sprout)
+    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    out.paste(img, mask=mask)
+    return out
 
 
 def main():
     OUT.mkdir(exist_ok=True)
-    icon = draw_icon()
-    icon.resize((256, 256), Image.LANCZOS).save(OUT / "farm.png")
-    icon.save(OUT / "farm.ico", sizes=[(16, 16), (20, 20), (24, 24), (32, 32), (40, 40),
-                                     (48, 48), (64, 64), (128, 128), (256, 256)])
-    print("已生成", OUT / "farm.ico", OUT / "farm.png")
+    big = make(S)
+    # 外面留一点透明边，任务栏 / 桌面上和系统图标大小更协调
+    canvas = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    inner = big.resize((int(S * 0.9), int(S * 0.9)), Image.LANCZOS)
+    canvas.paste(inner, ((S - inner.width) // 2, (S - inner.height) // 2), inner)
+    canvas.resize((256, 256), Image.LANCZOS).save(OUT / "farm.png")
+    sizes = [16, 20, 24, 32, 40, 48, 64, 128, 256]
+    canvas.resize((256, 256), Image.LANCZOS).save(OUT / "farm.ico", sizes=[(s, s) for s in sizes])
+    print("已生成", OUT / "farm.png", OUT / "farm.ico")
 
 
 if __name__ == "__main__":

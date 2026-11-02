@@ -1,7 +1,7 @@
 """QQ 经典农场挂机 —— 图形界面。双击「启动农场助手.bat」打开。
 
 开始 / 停止 / 立即跑一轮，F10 全局停止，挂机期间阻止电脑休眠和自动锁屏。
-界面用 customtkinter（圆角、开关、卡片），配色跟游戏的田园风格一致。
+界面用 customtkinter，仿苹果风格（留白、少颜色、一个主按钮、分组列表），跟随 Windows 浅色 / 深色模式。
 """
 import ctypes
 import datetime as dt
@@ -56,22 +56,24 @@ C = {
     "red_tint_hover": ("#FFD6D2", "#4A1D1A"),
     "orange_tint": ("#FFF1DC", "#33240B"),
     "orange_text": ("#C25E00", "#FF9F0A"),
-    "switch_off": ("#E9E9EA", "#39393D"),
+    "switch_off": ("#E3E3E8", "#39393D"),
 }
 FONT = "Microsoft YaHei UI"
 NUM_FONT = "Segoe UI Variable Display"   # 数字字形接近苹果的 SF 字体
-TAB_RUN, TAB_SET = "        运行情况        ", "          设置          "
+FONT_MEDIUM = "Noto Sans SC Medium"     # 标题用中等粗细，比粗体更精致
+THEMES = {"跟随系统": "system", "浅色": "light", "深色": "dark"}   # 设置里的主题选项 -> customtkinter 的模式
+TAB_RUN, TAB_SET = "            概览            ", "            设置            "
 
-# 统计卡片：(属性名, 标题, 单位, 颜色)，颜色取苹果系统色
+# 统计：(属性名, 标题, 单位)
 STATS = [
-    ("harvests", "收菜", "次", ("#34C759", "#30D158")),
-    ("planted", "播种", "次", ("#00C7BE", "#63E6E2")),
-    ("farmed", "自家务农", "次", ("#30B0C7", "#40C8E0")),
-    ("friends_stolen", "偷菜", "家", ("#FF9500", "#FF9F0A")),
-    ("friends_helped", "帮好友务农", "家", ("#A2845E", "#AC8E68")),
-    ("tasks_claimed", "任务奖励", "个", ("#5856D6", "#5E5CE6")),
-    ("milktea_claims", "奶茶收益", "次", ("#FF2D55", "#FF375F")),
-    ("reconnects_total", "掉线恢复", "次", ("#AF52DE", "#BF5AF2")),
+    ("harvests", "收菜", "次"),
+    ("planted", "播种", "次"),
+    ("farmed", "务农", "次"),
+    ("friends_stolen", "偷菜", "家"),
+    ("friends_helped", "帮好友", "家"),
+    ("tasks_claimed", "任务奖励", "个"),
+    ("milktea_claims", "奶茶收益", "次"),
+    ("reconnects_total", "掉线恢复", "次"),
 ]
 
 
@@ -157,8 +159,66 @@ def install_crash_logging():
     return f
 
 
+def load_fonts():
+    """加载 assets/fonts 里的字体（只给本程序用，不安装到系统），再挑本机有的字体。"""
+    global FONT, FONT_MEDIUM, NUM_FONT
+    for p in (BASE_DIR / "assets" / "fonts").glob("*.[ot]tf"):
+        ctypes.windll.gdi32.AddFontResourceExW(str(p), 0x10, 0)   # FR_PRIVATE
+    import tkinter.font as tkfont
+    have = set(tkfont.families())
+    FONT = next((f for f in ("Noto Sans SC", "Microsoft YaHei UI") if f in have), FONT)
+    FONT_MEDIUM = FONT_MEDIUM if FONT_MEDIUM in have else FONT
+    NUM_FONT = next((f for f in ("Segoe UI Variable Display Semib", "Segoe UI Variable Display", "Segoe UI")
+                     if f in have), FONT)
+
+
 def font(size=13, weight="normal"):
+    """weight 可以是 normal / medium / bold；medium 用单独的中等粗细字体。"""
+    if weight == "medium":
+        return ctk.CTkFont(family=FONT_MEDIUM, size=size, weight="bold" if FONT_MEDIUM == FONT else "normal")
     return ctk.CTkFont(family=FONT, size=size, weight=weight)
+
+
+def pick(color):
+    """(浅色, 深色) 里按当前模式取一个，给不支持两套颜色的 tk 原生控件用。"""
+    return color[1] if ctk.get_appearance_mode() == "Dark" else color[0]
+
+
+class IOSSwitch(ctk.CTkLabel):
+    """仿 iPhone 的开关。customtkinter 自带的开关圆钮会盖住轨道、和白卡片混在一起，
+    所以用 PIL 画好「开 / 关 × 浅色 / 深色」四张抗锯齿图片（圆钮带淡阴影），点一下切换。"""
+    W, H = 46, 28        # 显示大小
+    _images = {}
+
+    @classmethod
+    def _render(cls, on, dark, k=4):
+        from PIL import ImageDraw, ImageFilter
+        w, h = cls.W * k, cls.H * k
+        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        track = C["green"][dark] if on else C["switch_off"][dark]
+        ImageDraw.Draw(img).rounded_rectangle((0, 0, w - 1, h - 1), radius=h // 2, fill=track)
+        pad = 2 * k
+        d = h - 2 * pad
+        x0 = w - pad - d if on else pad
+        shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        ImageDraw.Draw(shadow).ellipse((x0, pad + k, x0 + d, pad + k + d), fill=(0, 0, 0, 70))
+        img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(1.5 * k)))
+        ImageDraw.Draw(img).ellipse((x0, pad, x0 + d, pad + d), fill="#FFFFFF")
+        return img
+
+    @classmethod
+    def image(cls, on):
+        if on not in cls._images:
+            cls._images[on] = ctk.CTkImage(light_image=cls._render(on, 0), dark_image=cls._render(on, 1),
+                                           size=(cls.W, cls.H))
+        return cls._images[on]
+
+    def __init__(self, master, variable):
+        super().__init__(master, text="", image=self.image(bool(variable.get())), width=self.W, height=self.H,
+                         fg_color="transparent", cursor="hand2")
+        self.var = variable
+        self.bind("<Button-1>", lambda e: self.var.set(not self.var.get()))
+        variable.trace_add("write", lambda *_: self.configure(image=self.image(bool(self.var.get()))))
 
 
 class App:
@@ -192,6 +252,8 @@ class App:
         self.v_jitter = tk.StringVar(value=run.get("interval_jitter_min", "3"))
         self.v_quiet = tk.StringVar(value=run.get("quiet_hours", ""))
         self.v_awake = tk.BooleanVar(value=True)
+        theme = cfg["ui"].get("theme", "system") if cfg.has_section("ui") else "system"
+        self.v_theme = tk.StringVar(value=next((k for k, v in THEMES.items() if v == theme), "跟随系统"))
 
         self.build_ui()
         self.place_window()
@@ -209,32 +271,34 @@ class App:
                      "长期挂机请关掉这个窗口，改用桌面上的「农场挂机助手」打开")
         self.log("就绪。先在 QQ 里打开「QQ经典农场」，再点「开始挂机」。挂机时按 F10 可随时停止。")
 
-    # ================= 界面 =================
+    # ================= 界面（苹果风格：留白、少颜色、一个主按钮、分组列表） =================
     def build_ui(self):
         r = self.root
         r.title("农场挂机助手")   # 标题别含游戏窗口名，免得被当成游戏窗口
         r.configure(fg_color=C["bg"])
-        r.geometry("560x800")
-        r.minsize(500, 640)
+        r.geometry("500x800")
+        r.minsize(460, 660)
         self.set_icon()
+        self.hairlines = []   # tk 原生细线（customtkinter 画不出 1 像素的线），换浅色 / 深色时重新上色
 
         wrap = ctk.CTkFrame(r, fg_color="transparent")
-        wrap.pack(fill="both", expand=True, padx=16, pady=14)
+        wrap.pack(fill="both", expand=True, padx=20, pady=(18, 14))
 
         self.build_header(wrap)
         self.build_buttons(wrap)
 
         self.tabs = ctk.CTkTabview(
-            wrap, fg_color=C["card"], border_width=1, border_color=C["border"], corner_radius=14,
-            segmented_button_fg_color=C["gray_soft"], segmented_button_selected_color=C["green"],
-            segmented_button_selected_hover_color=C["green_hover"],
-            segmented_button_unselected_color=C["gray_soft"],
-            segmented_button_unselected_hover_color=C["border"],
-            text_color=C["text"], anchor="w")
-        self.tabs.pack(fill="both", expand=True, pady=(12, 0))
-        self.tabs._segmented_button.configure(font=font(13, "bold"))
-        tab_run = self.tabs.add("  运行情况  ")
-        tab_set = self.tabs.add("  设置  ")
+            wrap, fg_color="transparent", corner_radius=9, border_width=0, anchor="center",
+            segmented_button_fg_color=C["fill"],
+            segmented_button_selected_color=C["seg_sel"],
+            segmented_button_selected_hover_color=C["seg_sel"],
+            segmented_button_unselected_color=C["fill"],
+            segmented_button_unselected_hover_color=C["fill"],
+            text_color=C["text"])
+        self.tabs.pack(fill="both", expand=True, pady=(14, 0))
+        self.tabs._segmented_button.configure(font=font(13, "medium"), height=30, border_width=2)
+        tab_run = self.tabs.add(TAB_RUN)
+        tab_set = self.tabs.add(TAB_SET)
         self.build_run_tab(tab_run)
         self.build_settings_tab(tab_set)
 
@@ -248,176 +312,210 @@ class App:
         except tk.TclError:
             pass
 
-    def card(self, master, **kw):
-        return ctk.CTkFrame(master, fg_color=C["card"], corner_radius=14,
-                            border_width=1, border_color=C["border"], **kw)
+    @staticmethod
+    def card(master, **kw):
+        return ctk.CTkFrame(master, fg_color=C["card"], corner_radius=12, border_width=0, **kw)
+
+    def hairline(self, master, padx=(16, 0)):
+        line = tk.Frame(master, height=1, bd=0, highlightthickness=0, bg=pick(C["sep"]))
+        line.pack(fill="x", padx=padx)
+        self.hairlines.append(line)
 
     def build_header(self, master):
-        head = self.card(master)
+        head = ctk.CTkFrame(master, fg_color="transparent")
         head.pack(fill="x")
-        inner = ctk.CTkFrame(head, fg_color="transparent")
-        inner.pack(fill="x", padx=14, pady=12)
-
         if ICON_PNG.exists():
-            img = ctk.CTkImage(Image.open(ICON_PNG), size=(48, 48))
-            ctk.CTkLabel(inner, image=img, text="").pack(side="left")
-        titles = ctk.CTkFrame(inner, fg_color="transparent")
+            img = ctk.CTkImage(Image.open(ICON_PNG), size=(50, 50))
+            ctk.CTkLabel(head, image=img, text="").pack(side="left")
+        titles = ctk.CTkFrame(head, fg_color="transparent")
         titles.pack(side="left", padx=(12, 0))
-        ctk.CTkLabel(titles, text="农场挂机助手", font=font(20, "bold"),
-                     text_color=C["text"]).pack(anchor="w")
-        self.lbl_sub = ctk.CTkLabel(titles, text="QQ 经典农场 · 收菜 · 种菜 · 务农 · 领奖励",
-                                    font=font(12), text_color=C["muted"])
-        self.lbl_sub.pack(anchor="w")
+        ctk.CTkLabel(titles, text="农场挂机助手", font=font(21, "medium"), text_color=C["text"],
+                     height=30).pack(anchor="w")
+        status = ctk.CTkFrame(titles, fg_color="transparent")
+        status.pack(anchor="w")
+        self.dot = ctk.CTkLabel(status, text="●", font=font(10), text_color=C["muted"], height=20)
+        self.dot.pack(side="left", padx=(1, 5))
+        self.lbl_status = ctk.CTkLabel(status, text="已停止", font=font(13), text_color=C["muted"], height=20)
+        self.lbl_status.pack(side="left")
 
-        self.pill = ctk.CTkLabel(inner, text="● 已停止", font=font(13, "bold"), corner_radius=12,
-                                 fg_color=C["gray_soft"], text_color=C["muted"], width=96, height=30)
-        self.pill.pack(side="right")
-
-        # 第二行：下一轮倒计时 / 已运行时长
-        info = ctk.CTkFrame(head, fg_color="transparent")
-        info.pack(fill="x", padx=14, pady=(0, 12))
-        self.lbl_next = ctk.CTkLabel(info, text="还没开始", font=font(13), text_color=C["text"])
-        self.lbl_next.pack(side="left")
-        self.lbl_uptime = ctk.CTkLabel(info, text="", font=font(12), text_color=C["muted"])
-        self.lbl_uptime.pack(side="right")
-
-        # 异常提示条（平时隐藏）
-        self.warn = ctk.CTkLabel(master, text="", font=font(12, "bold"), corner_radius=10,
-                                 fg_color=C["orange_soft"], text_color="#B36B12", height=32)
+        # 异常提示（平时隐藏）
+        self.warn = ctk.CTkLabel(master, text="", font=font(12), corner_radius=10,
+                                 fg_color=C["orange_tint"], text_color=C["orange_text"], height=34)
 
     def build_buttons(self, master):
-        row = ctk.CTkFrame(master, fg_color="transparent")
-        row.pack(fill="x", pady=(12, 0))
-        self.btn_row = row
-        row.grid_columnconfigure((0, 1, 2), weight=1, uniform="b")
-        common = dict(height=44, corner_radius=12, font=font(14, "bold"))
-        self.btn_start = ctk.CTkButton(row, text="▶  开始挂机", command=self.start,
-                                       fg_color=C["green"], hover_color=C["green_hover"],
-                                       text_color="white", text_color_disabled="#E3F1E2", **common)
-        self.btn_start.grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        self.btn_stop = ctk.CTkButton(row, text="■  停止  F10", command=self.stop,
-                                      fg_color=C["red"], hover_color=C["red_hover"],
-                                      text_color="white", text_color_disabled="#F7DCD7", **common)
-        self.btn_stop.grid(row=0, column=1, sticky="ew", padx=6)
-        self.btn_now = ctk.CTkButton(row, text="⟳  立即跑一轮", command=self.run_now,
-                                     fg_color=C["card"], hover_color=C["orange_soft"],
-                                     border_width=2, border_color=C["orange"],
-                                     text_color="#B36B12", text_color_disabled=C["muted"], **common)
-        self.btn_now.grid(row=0, column=2, sticky="ew", padx=(6, 0))
+        box = ctk.CTkFrame(master, fg_color="transparent")
+        box.pack(fill="x", pady=(18, 0))
+        self.btn_row = box
+        # 只有一个主按钮：没挂机时「开始挂机」（蓝），挂机中变成「停止挂机」（浅红底红字）
+        self.btn_main = ctk.CTkButton(box, text="开始挂机", command=self.toggle, height=46, corner_radius=12,
+                                      font=font(15, "medium"), border_width=0,
+                                      fg_color=C["blue"], hover_color=C["blue_hover"], text_color="white")
+        self.btn_main.pack(fill="x")
+        sub = ctk.CTkFrame(box, fg_color="transparent")
+        sub.pack(pady=(6, 0))
+        self.btn_now = ctk.CTkButton(sub, text="立即跑一轮", command=self.run_now, width=80, height=26,
+                                     corner_radius=6, font=font(13), fg_color="transparent",
+                                     hover_color=C["fill"], text_color=C["blue"], text_color_disabled=C["muted"])
+        self.btn_now.pack(side="left")
+        ctk.CTkLabel(sub, text="·   按 F10 随时停止", font=font(12), text_color=C["muted"]).pack(
+            side="left", padx=(4, 0))
         self.style_buttons()
 
     def build_run_tab(self, tab):
-        tab.configure(fg_color=C["card"])
-        # 统计卡片 4 x 2
-        grid = ctk.CTkFrame(tab, fg_color="transparent")
-        grid.pack(fill="x", padx=4, pady=(4, 8))
-        grid.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="s")
+        tab.configure(fg_color="transparent")
+        # 统计：一张白卡，黑色数字 + 灰色小字，不用花哨的颜色
+        stats = self.card(tab)
+        stats.pack(fill="x", pady=(4, 0))
         self.stat_labels = {}
-        for i, (key, title, unit, color) in enumerate(STATS):
-            tile = ctk.CTkFrame(grid, fg_color=C["bg"], corner_radius=12)
-            tile.grid(row=i // 4, column=i % 4, sticky="nsew", padx=4, pady=4)
-            ctk.CTkFrame(tile, fg_color=color, width=28, height=4, corner_radius=2).pack(
-                anchor="w", padx=12, pady=(10, 0))
-            num = ctk.CTkLabel(tile, text="0", font=font(22, "bold"), text_color=C["text"])
-            num.pack(anchor="w", padx=12, pady=(2, 0))
-            ctk.CTkLabel(tile, text=f"{title}（{unit}）", font=font(11), text_color=C["muted"]).pack(
-                anchor="w", padx=12, pady=(0, 10))
-            self.stat_labels[key] = num
+        for r0 in (0, 4):
+            if r0:
+                self.hairline(stats, padx=16)
+            grid = ctk.CTkFrame(stats, fg_color="transparent")
+            grid.pack(fill="x", padx=8, pady=10)
+            grid.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="s")
+            for j, (key, title, unit) in enumerate(STATS[r0:r0 + 4]):
+                cell = ctk.CTkFrame(grid, fg_color="transparent")
+                cell.grid(row=0, column=j, sticky="w", padx=8)
+                line = ctk.CTkFrame(cell, fg_color="transparent")
+                line.pack(anchor="w")
+                num = ctk.CTkLabel(line, text="0", font=ctk.CTkFont(family=NUM_FONT, size=24),
+                                   text_color=C["text"], height=32)
+                num.pack(side="left")
+                ctk.CTkLabel(line, text=unit, font=font(11), text_color=C["muted"], height=32).pack(
+                    side="left", padx=(3, 0), pady=(6, 0))
+                ctk.CTkLabel(cell, text=title, font=font(12), text_color=C["muted"], height=18).pack(anchor="w")
+                self.stat_labels[key] = num
+        self.lbl_uptime = ctk.CTkLabel(tab, text="", font=font(12), text_color=C["muted"], height=20)
+        self.lbl_uptime.pack(anchor="w", padx=16, pady=(6, 0))
 
         # 日志
         bar = ctk.CTkFrame(tab, fg_color="transparent")
-        bar.pack(fill="x", padx=8, pady=(4, 4))
-        ctk.CTkLabel(bar, text="运行日志", font=font(13, "bold"), text_color=C["text"]).pack(side="left")
-        ctk.CTkButton(bar, text="打开文件夹", width=86, height=26, corner_radius=8, font=font(12),
-                      fg_color=C["gray_soft"], hover_color=C["border"], text_color=C["text"],
-                      command=lambda: os.startfile(BASE_DIR)).pack(side="right")
-        ctk.CTkButton(bar, text="清空", width=56, height=26, corner_radius=8, font=font(12),
-                      fg_color=C["gray_soft"], hover_color=C["border"], text_color=C["text"],
-                      command=self.clear_log).pack(side="right", padx=6)
+        bar.pack(fill="x", pady=(12, 4))
+        ctk.CTkLabel(bar, text="日志", font=font(12), text_color=C["muted"]).pack(side="left", padx=(16, 0))
+        link = dict(height=24, corner_radius=6, font=font(13), fg_color="transparent",
+                    hover_color=C["fill"], text_color=C["blue"])
+        ctk.CTkButton(bar, text="打开文件夹", width=78, command=lambda: os.startfile(BASE_DIR),
+                      **link).pack(side="right")
+        ctk.CTkButton(bar, text="清空", width=44, command=self.clear_log, **link).pack(side="right", padx=2)
 
-        self.txt = ctk.CTkTextbox(tab, font=ctk.CTkFont(family="Consolas", size=12), wrap="word",
-                                  fg_color=C["log_bg"], text_color=C["text"], corner_radius=10,
-                                  border_width=1, border_color=C["border"])
-        self.txt.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-        self.txt.tag_config("time", foreground="#B0A08A")
-        self.txt.tag_config("good", foreground="#2E8B3E")
-        self.txt.tag_config("warn", foreground="#C8691B")
-        self.txt.tag_config("bad", foreground="#C93B2B")
+        self.txt = ctk.CTkTextbox(tab, font=font(12), wrap="word", fg_color=C["card"], text_color=C["text"],
+                                  corner_radius=12, border_width=0, border_spacing=12,
+                                  scrollbar_button_color=C["fill"], scrollbar_button_hover_color=C["muted"])
+        self.txt.pack(fill="both", expand=True, pady=(0, 2))
+        self.apply_mode_colors()
         self.txt.configure(state="disabled")
 
-    # ---------- 设置页 ----------
+    def apply_mode_colors(self):
+        """tk 原生控件（日志文字颜色、细线）不支持浅色 / 深色两套，按当前模式上色，模式变了再来一次。"""
+        self.color_mode = ctk.get_appearance_mode()
+        self.txt.tag_config("time", foreground=pick(C["muted"]))
+        self.txt.tag_config("good", foreground=pick(C["text"]))
+        self.txt.tag_config("warn", foreground=pick(C["orange_text"]))
+        self.txt.tag_config("bad", foreground=pick(C["red"]))
+        for line in self.hairlines:
+            line.configure(bg=pick(C["sep"]))
+
+    # ---------- 设置页：iOS 分组列表，每行只有名称和开关，说明放在组下方 ----------
     def build_settings_tab(self, tab):
-        tab.configure(fg_color=C["card"])
-        sc = ctk.CTkScrollableFrame(tab, fg_color="transparent", scrollbar_button_color=C["border"],
+        tab.configure(fg_color="transparent")
+        sc = ctk.CTkScrollableFrame(tab, fg_color="transparent", scrollbar_button_color=C["fill"],
                                     scrollbar_button_hover_color=C["muted"])
         sc.pack(fill="both", expand=True)
         self.settings_scroll = sc
-        ctk.CTkLabel(sc, text="改完点「开始挂机」或「立即跑一轮」时自动保存", font=font(12),
-                     text_color=C["muted"]).pack(anchor="w", padx=6, pady=(0, 6))
 
-        sec = self.section(sc, "自家农场")
-        self.switch(sec, "收自己的菜", self.v_harvest, "成熟了点「一键收获」")
-        self.switch(sec, "自动种菜", self.v_plant, "有空地且有种子才种，优先种数量最多的种子")
-        self.switch(sec, "自家务农", self.v_farm, "除草 / 除虫 / 浇水")
+        g = self.section(sc, "外观")
+        row = self.row(g, "主题")
+        ctk.CTkSegmentedButton(row, values=list(THEMES), variable=self.v_theme, command=self.set_theme,
+                               font=font(12, "medium"), height=28, corner_radius=8, border_width=2,
+                               fg_color=C["fill"], selected_color=C["seg_sel"], selected_hover_color=C["seg_sel"],
+                               unselected_color=C["fill"], unselected_hover_color=C["fill"],
+                               text_color=C["text"]).pack(side="right")
 
-        sec = self.section(sc, "好友")
-        self.switch(sec, "去好友家偷菜", self.v_steal, "只进头像上有「戴墨镜小手」的好友家")
-        self.switch(sec, "帮好友务农", self.v_help, "挨个去有「小农夫」的好友家，比较花时间")
-        row = self.switch(sec, "定时巡逻所有好友", self.v_patrol,
-                          "平时有右下角提示才去；开了就定时挨个看一遍所有好友")
-        self.number(row, self.v_patrol_min, "分钟", prefix="每")
+        g = self.section(sc, "自家农场")
+        self.switch_row(g, "收菜", self.v_harvest)
+        self.switch_row(g, "种菜", self.v_plant)
+        self.switch_row(g, "务农", self.v_farm)
+        self.footer(sc, "有空地且有种子才种，优先种数量最多的种子；务农是除草、除虫、浇水。")
 
-        sec = self.section(sc, "领取奖励")
-        self.switch(sec, "自动领取每日任务奖励", self.v_tasks, "书本图标出现红色角标时去领")
-        row = self.switch(sec, "领取「奶茶热销中」收益", self.v_milktea, "收益最多攒 48 小时")
-        self.number(row, self.v_milktea_iv, "分钟一次", prefix="每")
+        g = self.section(sc, "好友")
+        self.switch_row(g, "偷菜", self.v_steal)
+        self.switch_row(g, "帮好友务农", self.v_help)
+        self.switch_row(g, "定时巡逻所有好友", self.v_patrol)
+        self.number_row(g, "巡逻间隔", self.v_patrol_min, "分钟")
+        self.footer(sc, "平时只在自家右下角出现可偷或求助提示时才去；定时巡逻会挨个看一遍所有好友。")
 
-        sec = self.section(sc, "挂机节奏")
-        row = self.line(sec, "每轮间隔", "两轮之间等待的时间，加一点随机更像真人")
-        self.number(row, self.v_jitter, "分钟", prefix="±")
-        self.number(row, self.v_interval, "分钟")
-        row = self.line(sec, "休息时段", "如 1-7 表示凌晨 1 点到 7 点不操作；留空不休息")
-        ctk.CTkEntry(row, textvariable=self.v_quiet, width=70, height=30, corner_radius=8,
-                     font=font(13), justify="center", border_color=C["border"],
-                     fg_color="white", text_color=C["text"]).pack(side="right")
-        self.switch(sec, "阻止电脑休眠和自动锁屏", self.v_awake, "锁屏后截图是黑的，脚本无法工作")
+        g = self.section(sc, "奖励")
+        self.switch_row(g, "每日任务奖励", self.v_tasks)
+        self.switch_row(g, "奶茶店收益", self.v_milktea)
+        self.number_row(g, "奶茶收益领取间隔", self.v_milktea_iv, "分钟")
+        self.footer(sc, "任务奖励每天领到一次就不再点；奶茶店收益最多攒 48 小时。")
 
-        sec = self.section(sc, "掉线处理")
-        row = self.switch(sec, "被挤下线后自动重新登录", self.v_relogin, "自己在手机上玩时可设等 30 分钟")
-        self.number(row, self.v_relogin_wait, "分钟后", prefix="等")
+        g = self.section(sc, "节奏")
+        self.number_row(g, "每轮间隔", self.v_interval, "分钟")
+        self.number_row(g, "随机浮动", self.v_jitter, "分钟", prefix="±")
+        row = self.row(g, "休息时段")
+        self.entry(row, self.v_quiet, 64)
+        self.switch_row(g, "阻止休眠和锁屏", self.v_awake)
+        self.footer(sc, "休息时段如1-7表示凌晨1点到7点不操作，留空不休息。锁屏后截图是黑的，脚本无法工作。")
+
+        g = self.section(sc, "掉线")
+        self.switch_row(g, "被挤下线后重新登录", self.v_relogin)
+        self.number_row(g, "等待", self.v_relogin_wait, "分钟")
+        self.footer(sc, "自己在手机上玩时，可以设等30分钟再登录，免得把手机挤掉。")
+
+        ctk.CTkLabel(sc, text="设置会在开始挂机时自动保存", font=font(11), text_color=C["muted"]).pack(pady=(16, 14))
+
+    def set_theme(self, label):
+        """切换浅色 / 深色，马上生效，并记到 config.ini 里下次打开还是这个。"""
+        mode = THEMES.get(label, "system")
+        ctk.set_appearance_mode(mode)
+        self.root.after(50, self.apply_mode_colors)
+        try:
+            save_config_values("ui", {"theme": mode})
+        except Exception:
+            pass
 
     def section(self, master, title):
-        box = ctk.CTkFrame(master, fg_color=C["bg"], corner_radius=12)
-        box.pack(fill="x", padx=4, pady=6)
-        ctk.CTkLabel(box, text=title, font=font(14, "bold"), text_color=C["text"]).pack(
-            anchor="w", padx=14, pady=(10, 2))
+        ctk.CTkLabel(master, text=title, font=font(12), text_color=C["muted"], height=18).pack(
+            anchor="w", padx=16, pady=(16, 6))
+        box = self.card(master)
+        box.pack(fill="x", padx=(0, 8))
+        box.rows = 0
         return box
 
-    def line(self, master, title, desc):
-        row = ctk.CTkFrame(master, fg_color="transparent")
-        row.pack(fill="x", padx=14, pady=(4, 8))
-        left = ctk.CTkFrame(row, fg_color="transparent")
-        left.pack(side="left", fill="x", expand=True)
-        ctk.CTkLabel(left, text=title, font=font(13), text_color=C["text"]).pack(anchor="w")
-        ctk.CTkLabel(left, text=desc, font=font(11), text_color=C["muted"], justify="left",
-                     wraplength=300).pack(anchor="w")
+    @staticmethod
+    def footer(master, text):
+        ctk.CTkLabel(master, text=text, font=font(11), text_color=C["muted"], justify="left",
+                     wraplength=380, anchor="w").pack(fill="x", padx=16, pady=(6, 0))
+
+    def row(self, card, title):
+        if card.rows:
+            self.hairline(card)
+        card.rows += 1
+        row = ctk.CTkFrame(card, fg_color="transparent", height=46)
+        row.pack(fill="x", padx=16)
+        row.pack_propagate(False)
+        ctk.CTkLabel(row, text=title, font=font(14), text_color=C["text"]).pack(side="left")
         return row
 
-    def switch(self, master, title, var, desc):
-        row = self.line(master, title, desc)
-        ctk.CTkSwitch(row, text="", variable=var, onvalue=True, offvalue=False, width=46,
-                      progress_color=C["green"], button_color="white", button_hover_color="#F4F4F4",
-                      fg_color=C["border"]).pack(side="right")
+    def switch_row(self, card, title, var):
+        row = self.row(card, title)
+        IOSSwitch(row, var).pack(side="right")
         return row
 
-    def number(self, row, var, unit, prefix=""):
-        """在一行右侧放一个小数字输入框：[前缀] [数字] [单位]（pack 从右往左，所以倒着放）"""
-        ctk.CTkLabel(row, text=unit, font=font(12), text_color=C["muted"]).pack(side="right", padx=(4, 8))
-        ctk.CTkEntry(row, textvariable=var, width=52, height=30, corner_radius=8, font=font(13),
-                     justify="center", border_color=C["border"], fg_color="white",
+    def entry(self, row, var, width=52):
+        ctk.CTkEntry(row, textvariable=var, width=width, height=28, corner_radius=8, font=font(13),
+                     justify="center", border_width=0, fg_color=C["fill"],
                      text_color=C["text"]).pack(side="right")
+
+    def number_row(self, card, title, var, unit, prefix=""):
+        """一行：名称 …… [前缀] [数字] 单位（pack 从右往左，所以倒着放）"""
+        row = self.row(card, title)
+        ctk.CTkLabel(row, text=unit, font=font(13), text_color=C["muted"]).pack(side="right", padx=(6, 0))
+        self.entry(row, var)
         if prefix:
-            ctk.CTkLabel(row, text=prefix, font=font(12), text_color=C["muted"]).pack(side="right", padx=(8, 4))
+            ctk.CTkLabel(row, text=prefix, font=font(13), text_color=C["muted"]).pack(side="right", padx=(0, 6))
+        return row
 
     def place_window(self):
         """放在农场窗口右侧，避免挡住游戏（被挡住会识别失败）。"""
@@ -491,12 +589,12 @@ class App:
             patrol_min = max(10.0, float(self.v_patrol_min.get()))
         except ValueError:
             messagebox.showerror("设置有误", "间隔 / 等待分钟数请填数字")
-            self.tabs.set("  设置  ")
+            self.tabs.set(TAB_SET)
             return None
         quiet = self.v_quiet.get().strip()
         if quiet and not re.fullmatch(r"\d{1,2}-\d{1,2}", quiet):
             messagebox.showerror("设置有误", "休息时段格式：起-止 小时，如 1-7")
-            self.tabs.set("  设置  ")
+            self.tabs.set(TAB_SET)
             return None
         values = {
             "do_harvest": str(self.v_harvest.get()).lower(),
@@ -530,7 +628,7 @@ class App:
         self.started_at = dt.datetime.now()
         self.worker = threading.Thread(target=self.work, args=(once,), daemon=True)
         self.worker.start()
-        self.tabs.set("  运行情况  ")
+        self.tabs.set(TAB_RUN)
         self.set_running(True, once)
 
     def work(self, once):
@@ -568,30 +666,40 @@ class App:
         else:
             self.root.after(0, self.stop)
 
+    def toggle(self):
+        self.stop() if self.running() else self.start()
+
     def style_buttons(self):
-        """按状态切换按钮可用 / 灰掉的样子。"""
-        running = self.mode != "stopped"
-        self.btn_start.configure(state="disabled" if running else "normal",
-                                 fg_color="#A5D6A7" if running else C["green"])
-        self.btn_stop.configure(state="normal" if running else "disabled",
-                                fg_color=C["red"] if running else "#F0B8AF")
-        once = self.mode == "once"
-        self.btn_now.configure(state="disabled" if once else "normal",
-                               border_color=C["border"] if once else C["orange"])
+        """主按钮：没挂机时蓝色「开始挂机」，挂机中浅红底红字「停止挂机」。"""
+        if self.mode == "stopped":
+            self.btn_main.configure(text="开始挂机", fg_color=C["blue"], hover_color=C["blue_hover"],
+                                    text_color="white")
+        else:
+            self.btn_main.configure(text="停止挂机" if self.mode == "running" else "停止",
+                                    fg_color=C["red_tint"], hover_color=C["red_tint_hover"], text_color=C["red"])
+        self.btn_now.configure(state="disabled" if self.mode == "once" else "normal")
 
     def set_running(self, on, once=False):
         if on:
             self.mode = "once" if once else "running"
-            self.pill.configure(text="● 单轮运行" if once else "● 挂机中",
-                                fg_color=C["green_soft"], text_color="#2E7D32")
             if self.v_awake.get():
                 ctypes.windll.kernel32.SetThreadExecutionState(
                     ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
         else:
             self.mode = "stopped"
-            self.pill.configure(text="● 已停止", fg_color=C["gray_soft"], text_color=C["muted"])
             ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
         self.style_buttons()
+        self.show_status()
+
+    def show_status(self, text=None):
+        """标题下面那行小字：● 挂机中 · 下一轮 …"""
+        if self.mode == "stopped":
+            self.dot.configure(text_color=C["muted"])
+            self.lbl_status.configure(text="已停止")
+        else:
+            self.dot.configure(text_color=C["green"])
+            head = "单轮运行中" if self.mode == "once" else "挂机中"
+            self.lbl_status.configure(text=f"{head} · {text}" if text else head)
 
     def poll(self):
         try:
@@ -604,6 +712,8 @@ class App:
                     self.set_running(False)
         except queue.Empty:
             pass
+        if ctk.get_appearance_mode() != self.color_mode:   # 系统切换了浅色 / 深色
+            self.apply_mode_colors()
         self.refresh_status()
         self.root.after(300, self.poll)
 
@@ -620,29 +730,26 @@ class App:
         running = self.running()
         if self.started_at and running:
             mins = int((dt.datetime.now() - self.started_at).total_seconds() // 60)
-            self.lbl_uptime.configure(text=f"已运行 {mins // 60} 小时 {mins % 60} 分 · 完成 {b.rounds} 轮")
+            self.lbl_uptime.configure(text=f"已运行 {mins // 60} 小时 {mins % 60} 分，完成 {b.rounds} 轮")
         elif not running:
-            self.lbl_uptime.configure(text=f"上次共完成 {b.rounds} 轮" if b.rounds else "")
+            self.lbl_uptime.configure(text=f"上次完成 {b.rounds} 轮" if b.rounds else "")
 
         if running and b.next_round_at:
             left = max(0, int((b.next_round_at - dt.datetime.now()).total_seconds()))
-            self.lbl_next.configure(text=f"下一轮 {b.next_round_at:%H:%M:%S}　还有 {left // 60}:{left % 60:02d}",
-                                    text_color=C["text"])
+            self.show_status(f"下一轮 {b.next_round_at:%H:%M}，还有 {left // 60}:{left % 60:02d}")
         elif running:
-            self.lbl_next.configure(text="正在操作游戏，请勿动鼠标…", text_color="#2E7D32")
-        else:
-            self.lbl_next.configure(text="已停止", text_color=C["muted"])
+            self.show_status("正在操作游戏，请勿动鼠标")
 
         # 异常提示条
         msg = ""
         if b.lost_rounds:
-            msg = f"⚠  连续 {b.lost_rounds} 轮找不到农场画面，请看一下 QQ 农场窗口"
+            msg = f"连续 {b.lost_rounds} 轮找不到农场画面，请看一下 QQ 农场窗口"
         elif b.errors:
-            msg = f"⚠  有 {b.errors} 轮出错，详情见日志"
+            msg = f"有 {b.errors} 轮出错，详情见日志"
         if msg:
             self.warn.configure(text=msg)
             if not self.warn.winfo_ismapped():
-                self.warn.pack(fill="x", pady=(10, 0), before=self.btn_row)
+                self.warn.pack(fill="x", pady=(14, 0), before=self.btn_row)
         elif self.warn.winfo_ismapped():
             self.warn.pack_forget()
 
@@ -663,8 +770,11 @@ def main():
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("qqfarm.autohelper")
     except Exception:
         pass
-    ctk.set_appearance_mode("light")
+    cfg = load_config(CONFIG_PATH)
+    theme = cfg["ui"].get("theme", "system") if cfg.has_section("ui") else "system"
+    ctk.set_appearance_mode(theme)   # 设置里选的主题；默认跟随 Windows 的浅色 / 深色模式
     root = ctk.CTk()
+    load_fonts()
     # 界面回调里的异常默认打印到 stderr（pythonw 下看不到），改成写进 crash.log
     root.report_callback_exception = lambda *a: crash_log.write(
         "界面回调异常：\n" + "".join(traceback.format_exception(*a)))
