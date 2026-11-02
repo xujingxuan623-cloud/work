@@ -11,6 +11,7 @@
 import argparse
 import configparser
 import datetime as dt
+import json
 import random
 import re
 import sys
@@ -83,6 +84,25 @@ class Stopped(Exception):
     """收到停止信号。"""
 
 
+STATE_PATH = BASE_DIR / "state.json"   # 跨重启要记住的东西（比如今天的任务奖励领过没有）
+
+
+def load_state():
+    try:
+        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(**kv):
+    st = load_state()
+    st.update(kv)
+    try:
+        STATE_PATH.write_text(json.dumps(st, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def load_config(path=BASE_DIR / "config.ini"):
     cfg = configparser.ConfigParser(inline_comment_prefixes=(";",))
     cfg.read(path, encoding="utf-8-sig")
@@ -120,6 +140,7 @@ class FarmBot:
         self.tasks_claimed = 0   # 统计：领取任务奖励次数
         self.kicked_at = None    # 发现被挤下线的时间
         self.last_task_check = None
+        self.tasks_done_day = load_state().get("tasks_done_day")   # 哪天领过每日任务奖励了
         self.milktea_claims = 0  # 统计：领取奶茶店收益次数
         self.last_milktea = None
         run = cfg["run"]
@@ -890,7 +911,11 @@ class FarmBot:
 
     def claim_tasks(self, force=False):
         """打开任务面板，OCR 找「领取」按钮挨个点（不点「前往」「已完成」），领完关面板。
-        平时只在书本上有红色角标时才打开；另外每 2 小时兜底检查一次。"""
+        平时只在书本上有红色角标时才打开；另外每 2 小时兜底检查一次。
+        每天领到一次就够了，领过之后当天不再打开，第二天再来。"""
+        today = dt.date.today().isoformat()
+        if self.tasks_done_day == today and not force:
+            return
         screen = self.grab()
         icon = self.find(screen, "task_icon")
         if not icon:
@@ -925,7 +950,9 @@ class FarmBot:
                 self.click_text_button(s)
         if got:
             self.tasks_claimed += got
-            log(f"  共领取 {got} 个任务奖励")
+            self.tasks_done_day = today
+            save_state(tasks_done_day=today)
+            log(f"  共领取 {got} 个任务奖励，今天不再领了，明天再来")
         self.click_role("panel_close", wait=0.5)
         self.ensure_home()
 
