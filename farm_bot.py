@@ -148,6 +148,8 @@ class FarmBot:
 
         self.win = GameWindow(cfg["window"].get("title", "QQ经典农场"),
                               cfg["window"].getboolean("activate", True))
+        size = cfg["window"].get("client_size", "452x843").strip().lower()
+        self.client_size = tuple(int(v) for v in size.split("x")) if size else None
         sc = cfg["friend_bar"]
         self.bar_from = parse_pair(sc.get("scroll_from", "0.85, 0.88"))
         self.bar_to = parse_pair(sc.get("scroll_to", "0.15, 0.88"))
@@ -497,6 +499,14 @@ class FarmBot:
         """确认现在在自家农场；不在就想办法回来（重新连接、回家按钮、关面板、点确定之类的按钮）。
         注意：弹窗下面的「好友」按钮仍然能认出来，所以先处理掉线 / 弹窗，再判断是否在家。"""
         saved = False
+        if self.client_size:
+            try:
+                _, _, cw, ch = self.win.client_rect()
+                if self.win.fix_client_size(*self.client_size):
+                    log(f"  农场窗口大小变成了 {cw}x{ch}，已调回 {self.client_size[0]}x{self.client_size[1]}")
+                    self.sleep(3)   # 游戏要重新排版，马上点会点不进去
+            except Exception:
+                pass
         for _ in range(tries):
             screen = self.grab()
             hit = self.find(screen, "relogin")

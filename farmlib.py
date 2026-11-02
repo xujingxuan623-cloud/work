@@ -86,6 +86,20 @@ class GameWindow:
                 pass
             time.sleep(0.3)
 
+    def fix_client_size(self, w, h):
+        """把窗口内容区调回 w x h（模板是按这个大小截的，窗口被拉伸后会认不出）。调整了返回 True。"""
+        hwnd = self.find()
+        if not hwnd or win32gui.IsIconic(hwnd):
+            return False
+        _, _, cw, ch = self.client_rect()
+        if abs(cw - w) <= 2 and abs(ch - h) <= 2:
+            return False
+        l, t, r, b = win32gui.GetWindowRect(hwnd)
+        win32gui.SetWindowPos(hwnd, 0, l, t, (r - l) + w - cw, (b - t) + h - ch,
+                              win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
+        time.sleep(1.0)
+        return True
+
     def client_rect(self):
         """返回窗口客户区在屏幕上的 (left, top, width, height)。"""
         hwnd = self.find()

@@ -355,7 +355,7 @@ class App:
         sec = self.section(sc, "好友")
         self.switch(sec, "去好友家偷菜", self.v_steal, "只进头像上有「戴墨镜小手」的好友家")
         self.switch(sec, "帮好友务农", self.v_help, "挨个去有「小农夫」的好友家，比较花时间")
-        row = self.line(sec, "什么时候去好友家", "右下角气泡出现墨镜小手 / 小农夫就去；没提示时隔一段时间主动去看一圈，填 0 每轮都去")
+        row = self.line(sec, "什么时候去好友家", "右下角提示可偷 / 求助就去；没提示时隔这么久主动去一次，填 0 = 每轮都去")
         self.number(row, self.v_friend_check, "分钟", prefix="最多隔")
 
         sec = self.section(sc, "领取奖励")
