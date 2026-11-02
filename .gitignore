@@ -11,3 +11,6 @@ __pycache__/
 
 # 本机运行状态（今天任务领过没有等）
 state.json
+
+# 本机下载的字体（思源黑体 Noto Sans SC，约 17MB，不上传）
+assets/fonts/*.otf
