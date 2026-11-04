@@ -25,7 +25,7 @@ import pyautogui
 
 CONFIG_PATH = BASE_DIR / "config.ini"
 LOG_DIR = BASE_DIR / "logs"
-ICON_ICO = BASE_DIR / "assets" / "farm.ico"
+ICON_ICO = BASE_DIR / "assets" / "sprout.ico"   # 换过图标要换文件名，否则 Windows 图标缓存一直显示旧的
 ICON_PNG = BASE_DIR / "assets" / "farm.png"
 
 ES_CONTINUOUS = 0x80000000

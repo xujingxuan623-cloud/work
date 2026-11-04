@@ -1,4 +1,4 @@
-"""生成程序图标 assets/farm.ico（多尺寸）和 assets/farm.png。改了样式重新运行一次即可：
+"""生成程序图标 assets/sprout.ico（多尺寸）和 assets/farm.png。改了样式重新运行一次即可：
     python tools/make_icon.py
 
 风格仿苹果 App 图标：超椭圆（圆润的方形）外形 + 柔和的绿色渐变 + 一株白色嫩芽，不加多余装饰。
@@ -102,8 +102,8 @@ def main():
     canvas.paste(inner, ((S - inner.width) // 2, (S - inner.height) // 2), inner)
     canvas.resize((256, 256), Image.LANCZOS).save(OUT / "farm.png")
     sizes = [16, 20, 24, 32, 40, 48, 64, 128, 256]
-    canvas.resize((256, 256), Image.LANCZOS).save(OUT / "farm.ico", sizes=[(s, s) for s in sizes])
-    print("已生成", OUT / "farm.png", OUT / "farm.ico")
+    canvas.resize((256, 256), Image.LANCZOS).save(OUT / "sprout.ico", sizes=[(s, s) for s in sizes])
+    print("已生成", OUT / "farm.png", OUT / "sprout.ico")
 
 
 if __name__ == "__main__":
